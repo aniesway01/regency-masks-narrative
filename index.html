@@ -315,6 +315,76 @@ body {
   right: 16px;
 }
 
+/* === Chapter Headers (Story View) === */
+.chapter-header {
+  width: 100%;
+  background: linear-gradient(135deg, #1a3a4a 0%, var(--bg3) 100%);
+  padding: 12px 20px;
+  margin: 24px 0 8px 0;
+  border-radius: var(--radius);
+  border-left: 4px solid var(--accent);
+}
+.chapter-header:first-child { margin-top: 0; }
+.chapter-header h3 {
+  font-size: 17px;
+  font-weight: 600;
+  color: #fff;
+  margin: 0;
+}
+.chapter-header .chapter-en {
+  font-size: 11px;
+  color: rgba(255,255,255,0.35);
+  font-style: italic;
+  margin-top: 2px;
+}
+.chapter-header .chapter-num {
+  font-size: 11px;
+  color: var(--accent);
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+/* === Passage Type Badge === */
+.type-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 600;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.type-badge.character_profile {
+  background: rgba(99,179,237,0.15);
+  color: #63b3ed;
+}
+.type-badge.branch_lore {
+  background: rgba(183,148,244,0.15);
+  color: #b794f4;
+}
+.type-badge.branch_choice {
+  background: rgba(251,191,36,0.15);
+  color: #fbbf24;
+}
+
+/* === Next Passage Link === */
+.next-link {
+  display: inline-block;
+  margin-top: 10px;
+  padding: 4px 14px;
+  border-radius: 16px;
+  background: rgba(217,119,6,0.12);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+  text-decoration: none;
+}
+.next-link:hover {
+  background: rgba(217,119,6,0.25);
+}
+
 /* === Empty / Loading States === */
 .loading {
   text-align: center;
@@ -385,6 +455,7 @@ body {
         <span>段落 ID</span>
       </label>
       <div class="view-toggle">
+        <button class="view-btn" data-view="story" id="viewStory">故事順序</button>
         <button class="view-btn active" data-view="group" id="viewGroup">按分類</button>
         <button class="view-btn" data-view="all" id="viewAll">全部段落</button>
       </div>
@@ -415,7 +486,7 @@ let openGroups = new Set();
 
 // === Data Loading ===
 async function loadData() {
-  const resp = await fetch('data/passages.json?v=2');
+  const resp = await fetch('data/passages.json?v=3');
   DATA = await resp.json();
   if (!DATA.meta.has_zh) {
     document.getElementById('showZh').parentElement.style.display = 'none';
@@ -460,7 +531,14 @@ function getFiltered() {
       (p.content || '').toLowerCase().includes(q) ||
       (p.name || '').toLowerCase().includes(q) ||
       (p.group || '').toLowerCase().includes(q) ||
-      (p.group_zh || '').includes(q)
+      (p.group_zh || '').includes(q) ||
+      (p.chapter || '').toLowerCase().includes(q) ||
+      (p.chapter_zh || '').includes(q)
+    );
+  }
+  if (currentView === 'story') {
+    passages = passages.slice().sort((a, b) =>
+      (a.narrative_order ?? 999) - (b.narrative_order ?? 999)
     );
   }
   return passages;
@@ -490,6 +568,13 @@ function getPassageTitle(p) {
   return name || `段落 ${p.pid}`;
 }
 
+// === Type Badge Labels ===
+const TYPE_LABELS = {
+  character_profile: '角色檔案',
+  branch_lore: '背景知識',
+  branch_choice: '分支',
+};
+
 // === Passage HTML ===
 function passageHtml(p, idx) {
   const title = getPassageTitle(p);
@@ -498,6 +583,13 @@ function passageHtml(p, idx) {
   const tags = (p.tags && p.tags.length > 0)
     ? `<div class="tag-row">${p.tags.map(t => `<span class="tag">${escHtml(t)}</span>`).join('')}</div>`
     : '';
+
+  // Type badge (story view only, non-main_path)
+  let typeBadge = '';
+  if (currentView === 'story' && p.passage_type && p.passage_type !== 'main_path') {
+    const label = TYPE_LABELS[p.passage_type] || p.passage_type;
+    typeBadge = `<span class="type-badge ${p.passage_type}">${label}</span>`;
+  }
 
   let textHtml = '';
   if (showZh && p.content_zh) {
@@ -521,12 +613,18 @@ function passageHtml(p, idx) {
     }
   }
 
-  return `<div class="passage">
+  // Next passage link (story view, main_path only)
+  let nextLink = '';
+  if (currentView === 'story' && p.passage_type === 'main_path' && p.next_pid) {
+    nextLink = `<a class="next-link" href="#" onclick="scrollToPassage('${p.next_pid}');return false;">→ 下一段</a>`;
+  }
+
+  return `<div class="passage" data-pid="${p.pid || ''}">
     <div class="passage-header">
-      <span class="passage-title">${escHtml(title)}</span>
+      <span class="passage-title">${escHtml(title)}${typeBadge}</span>
       ${pid}
     </div>
-    ${pname}${tags}${textHtml}
+    ${pname}${tags}${textHtml}${nextLink}
   </div>`;
 }
 
@@ -620,6 +718,75 @@ function groupPassages(passages) {
   return sorted;
 }
 
+// === Story View ===
+function renderStoryView(passages) {
+  const content = document.getElementById('content');
+  content.innerHTML = '';
+  if (passages.length === 0) {
+    content.innerHTML = '<div class="empty-state">未找到匹配的段落</div>';
+    return;
+  }
+  renderStoryChunked(content, passages, 0, null);
+}
+
+function renderStoryChunked(container, passages, startIdx, lastChapter) {
+  const CHUNK = 60;
+  const end = Math.min(startIdx + CHUNK, passages.length);
+  let html = '';
+  let prevChapter = lastChapter;
+
+  for (let i = startIdx; i < end; i++) {
+    const p = passages[i];
+    const ch = p.chapter || '';
+    if (ch && ch !== prevChapter) {
+      const chZh = p.chapter_zh || ch;
+      const chId = p.chapter_id != null ? p.chapter_id : '';
+      html += `<div class="chapter-header">
+        <div class="chapter-num">Chapter ${chId}</div>
+        <h3>${escHtml(chZh)}</h3>
+        <div class="chapter-en">${escHtml(ch)}</div>
+      </div>`;
+      prevChapter = ch;
+    }
+    html += passageHtml(p, i);
+  }
+  container.insertAdjacentHTML('beforeend', html);
+
+  if (end < passages.length) {
+    const sentinel = document.createElement('div');
+    sentinel.className = 'loading';
+    sentinel.style.padding = '20px';
+    sentinel.innerHTML = `<div style="font-size:12px;color:var(--text3)">載入更多 (${end}/${passages.length})...</div>`;
+    container.appendChild(sentinel);
+
+    const obs = new IntersectionObserver((entries) => {
+      if (entries[0].isIntersecting) {
+        obs.disconnect();
+        sentinel.remove();
+        renderStoryChunked(container, passages, end, prevChapter);
+      }
+    });
+    obs.observe(sentinel);
+  }
+}
+
+// === Scroll to Passage ===
+function scrollToPassage(pid, retries) {
+  if (retries == null) retries = 0;
+  const el = document.querySelector(`.passage[data-pid="${pid}"]`);
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    el.style.borderLeftColor = 'var(--accent)';
+    setTimeout(() => { el.style.borderLeftColor = ''; }, 2000);
+    return;
+  }
+  if (retries >= 10) return;
+  // Passage might not be rendered yet — scroll down to trigger lazy load
+  const content = document.getElementById('content');
+  content.scrollTop = content.scrollHeight;
+  setTimeout(() => scrollToPassage(pid, retries + 1), 400);
+}
+
 // === All View ===
 function renderAllView(passages) {
   const content = document.getElementById('content');
@@ -662,17 +829,21 @@ function renderPassageChunked(container, passages, startIdx) {
 // === Render ===
 function resetAndRender() {
   const passages = getFiltered();
-  if (currentView === 'group') {
+  if (currentView === 'story') {
+    renderStoryView(passages);
+  } else if (currentView === 'group') {
     renderGroupView(passages);
   } else {
     renderAllView(passages);
   }
 }
 
+const VIEW_BTN_IDS = { story: 'viewStory', group: 'viewGroup', all: 'viewAll' };
 function setActiveView(view) {
   currentView = view;
   document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
-  document.getElementById(view === 'group' ? 'viewGroup' : 'viewAll').classList.add('active');
+  const btnId = VIEW_BTN_IDS[view];
+  if (btnId) document.getElementById(btnId).classList.add('active');
   resetAndRender();
 }
 
@@ -705,6 +876,7 @@ function init() {
     resetAndRender();
   });
 
+  document.getElementById('viewStory').addEventListener('click', () => setActiveView('story'));
   document.getElementById('viewGroup').addEventListener('click', () => setActiveView('group'));
   document.getElementById('viewAll').addEventListener('click', () => setActiveView('all'));
 
